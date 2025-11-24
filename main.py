@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -21,55 +22,73 @@ if __name__ == '__main__':
 
     np.random.seed(0)
 
-    # TODO add argument parsing
-    sub = 2 
-    mask_percent = 0.25
-    wavelet = 'db16'
-    level = 3
-    mode = 'wrap'
-    l1_reg = 1e-1
-    debug = True
+    parser = argparse.ArgumentParser(prog='Compressed Senssing')
+    parser.add_argument('--filename', type=str, default='escher.jpeg', help='Input image')
+    parser.add_argument('--sub', type=int, default=2, help='Downsample factor')
+    parser.add_argument('--mask-percent', type=float, default=0.25, help='Portion to mask')
+    parser.add_argument('--method', type=str, default='wavelet', help='Use wavelet or dct')
+    parser.add_argument('--wavelet-name', type=str, default='db3', help='Wavelet')
+    parser.add_argument('--mode', type=str, default='wrap', help='Wavelet signal extension method')
+    parser.add_argument('--level', type=int, default=3, help='Wavelet level')
+    parser.add_argument('--l1-reg', type=float, default=1e-1, help='Weight of L1 regularization')
+    parser.add_argument('--debug', type=bool, default=True, help='Show descent')
+
+    args = parser.parse_args()
 
     # Load and downsample image
-    image = plt.imread('escher.jpeg')
+    image = plt.imread(args.filename)
     if len(image.shape) < 3:
         image = image[..., np.newaxis]
-    image = spimg.zoom(image, (1/sub, 1/sub, 1))
+    image = spimg.zoom(image, (1/args.sub, 1/args.sub, 1))
     nx, ny, c = image.shape
 
     # Randomly mask image
-    k = round(nx * ny * mask_percent)
+    k = round(nx * ny * args.mask_percent)
     mask_index = np.sort(np.random.choice(nx * ny, k, replace=False))
     mask_array = np.zeros_like(image)
     mask_array.flat[mask_index] = 1 
     masked_image = image * mask_array 
-    # Make wavelet filters
-    filt = jw.get_filter_bank(wavelet)
-    kernel_dec, kernel_rec = jw.make_kernels(filt, 1)
 
-    def wavelet_decompose(x):
-        return jw.wavelet_dec(x.reshape(1, x.shape[0], x.shape[1], 1), kernel_dec, levels=level, mode=mode)
+    # Implement Compressed Sensing operators on 2D arrays
+    if args.method == 'wavelet':
+        filt = jw.get_filter_bank(args.wavelet_name)
+        kernel_dec, kernel_rec = jw.make_kernels(filt, 1)
 
-    def wavelet_reconstruct(x_wav):
-        return jw.wavelet_rec(x_wav, kernel_rec, levels=level, mode=mode).squeeze()
+        def wavelet_decompose(x):
+            return jw.wavelet_dec(x.reshape(1, x.shape[0], x.shape[1], 1), kernel_dec, levels=args.level, mode=args.mode)
 
-    def dct2(x):
-        return jax.scipy.fft.dct(jax.scipy.fft.dct(x.T, norm='ortho', axis=0).T, norm='ortho', axis=0)
+        def wavelet_reconstruct(x_wav):
+            return jw.wavelet_rec(x_wav, kernel_rec, levels=args.level, mode=args.mode).squeeze()
 
-    def idct2(x):
-        return jax.scipy.fft.idct(jax.scipy.fft.idct(x.T, norm='ortho', axis=0).T, norm='ortho', axis=0)
-    
-    # Define compressed sensing forward operators
+        def Psi(theta):
+            x = wavelet_reconstruct(theta)
+            return x
+
+        def adj_Psi(x):
+            theta = wavelet_decompose(x)
+            return theta
+
+    elif args.method == 'dct':
+
+        def dct2(x):
+            return jax.scipy.fft.dct(jax.scipy.fft.dct(x.T, norm='ortho', axis=0).T, norm='ortho', axis=0)
+
+        def idct2(x):
+            return jax.scipy.fft.idct(jax.scipy.fft.idct(x.T, norm='ortho', axis=0).T, norm='ortho', axis=0)
+        
+        def Psi(theta):
+            x = idct2(theta)
+            return x
+
+        def adj_Psi(x):
+            theta = dct2(x)
+            return theta
+
+    else:
+        raise NotImplementedError('Unknown method.')
+
     def Phi(x, mask):
         return x.ravel()[mask]
-
-    def Psi(theta):
-        x = wavelet_reconstruct(theta)
-        return x
-
-    def Psi_dct(theta):
-        x = idct2(theta)
-        return x
 
     def forward(theta, mask):
         return Phi(Psi(theta), mask)
@@ -79,9 +98,6 @@ if __name__ == '__main__':
         residuals = forward(x, mask) - y
         return jnp.sum(residuals ** 2)
 
-    # Compressed sensing per channels
-    mask_array = jnp.array(mask_array)
-    image_channels = []
 
     if c < 3:
         colormap = 'gray'
@@ -94,28 +110,27 @@ if __name__ == '__main__':
     axs[1].imshow(masked_image, cmap=colormap)
     axs[1].set_title('Masked image')
 
+    # Compressed sensing per channels
+    mask_array = jnp.array(mask_array)
+    image_channels = []
     for channel in range(c):
         image_channel = jnp.array(image[..., channel].astype(float))
 
         # Solving || A x - b||_2 + lambda ||x||_1
         b = Phi(image_channel, mask_index)
 
-        theta_true = wavelet_decompose(image_channel)
-        print(theta_true.shape)
-        #theta_true = dct2(image_channel)
+        theta_true = adj_Psi(image_channel)
         theta_init = jnp.ones_like(theta_true)
 
-        pg = ProximalGradient(fun=least_squares, prox=prox_lasso, verbose=debug, stepsize=0, maxls=50)
-        pg_sol = pg.run(theta_init, hyperparams_prox=l1_reg, data=(mask_index, b)).params
-        reconstruction = np.array(wavelet_reconstruct(pg_sol))
+        pg = ProximalGradient(fun=least_squares, prox=prox_lasso, verbose=args.debug, stepsize=0, maxls=50)
+        pg_sol = pg.run(theta_init, hyperparams_prox=args.l1_reg, data=(mask_index, b)).params
+        reconstruction = np.asarray(Psi(pg_sol))
         image_channels.append(reconstruction)
 
     reconstructed_image = np.stack(image_channels, axis=-1)
-
     reconstructed_psnr = psnr(image, reconstructed_image)
 
     axs[2].imshow(reconstructed_image, cmap=colormap)
     axs[2].set_title('Reconstructed image (PSNR: {:.2f} dB)'.format(reconstructed_psnr))
-    #plt.show()
-    fig.savefig('reconstruction_{}.png'.format(wavelet))
+    plt.show()
 
