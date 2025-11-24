@@ -9,6 +9,12 @@ import importlib
 jw = importlib.import_module('jax-wavelets.jax_wavelets.jax_wavelets')
 
 
+def psnr(img1, img2):
+    mse = np.mean(np.square(np.subtract(img1.astype(int), img2.astype(int))))
+    if mse == 0:
+        return np.Inf
+    PIXEL_MAX = 255.
+    return 20 * np.log10(PIXEL_MAX) - 10 * np.log10(mse)
 
 
 if __name__ == '__main__':
@@ -17,11 +23,11 @@ if __name__ == '__main__':
 
     # TODO add argument parsing
     sub = 2 
-    mask_percent = 0.75
-    wavelet = 'db6'
+    mask_percent = 0.25
+    wavelet = 'db16'
     level = 3
     mode = 'wrap'
-    l1_reg = 1e-5
+    l1_reg = 1e-1
     debug = True
 
     # Load and downsample image
@@ -35,9 +41,8 @@ if __name__ == '__main__':
     k = round(nx * ny * mask_percent)
     mask_index = np.sort(np.random.choice(nx * ny, k, replace=False))
     mask_array = np.zeros_like(image)
-    mask_array.flat[mask_index] = 1
-    masked_image = image * mask_array
-
+    mask_array.flat[mask_index] = 1 
+    masked_image = image * mask_array 
     # Make wavelet filters
     filt = jw.get_filter_bank(wavelet)
     kernel_dec, kernel_rec = jw.make_kernels(filt, 1)
@@ -77,25 +82,40 @@ if __name__ == '__main__':
     # Compressed sensing per channels
     mask_array = jnp.array(mask_array)
     image_channels = []
+
+    if c < 3:
+        colormap = 'gray'
+    else:
+        colormap = None
+
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    axs[0].imshow(image, cmap=colormap)
+    axs[0].set_title('Original image')
+    axs[1].imshow(masked_image, cmap=colormap)
+    axs[1].set_title('Masked image')
+
     for channel in range(c):
         image_channel = jnp.array(image[..., channel].astype(float))
 
         # Solving || A x - b||_2 + lambda ||x||_1
-        b = Phi(image_channel, mask_array)
+        b = Phi(image_channel, mask_index)
 
         theta_true = wavelet_decompose(image_channel)
+        print(theta_true.shape)
         #theta_true = dct2(image_channel)
         theta_init = jnp.ones_like(theta_true)
 
-        pg = ProximalGradient(fun=least_squares, prox=prox_lasso, verbose=debug)
-        pg_sol = pg.run(theta_init, hyperparams_prox=l1_reg, data=(mask_array, b)).params
-        reconstruction = wavelet_reconstruct(pg_sol)
-        #reconstruction = idct2(pg_sol)
-
-        image_channels.append(np.asarray(reconstruction))
+        pg = ProximalGradient(fun=least_squares, prox=prox_lasso, verbose=debug, stepsize=0, maxls=50)
+        pg_sol = pg.run(theta_init, hyperparams_prox=l1_reg, data=(mask_index, b)).params
+        reconstruction = np.array(wavelet_reconstruct(pg_sol))
+        image_channels.append(reconstruction)
 
     reconstructed_image = np.stack(image_channels, axis=-1)
 
-    plt.imshow(reconstructed_image)
-    plt.show()
+    reconstructed_psnr = psnr(image, reconstructed_image)
+
+    axs[2].imshow(reconstructed_image, cmap=colormap)
+    axs[2].set_title('Reconstructed image (PSNR: {:.2f} dB)'.format(reconstructed_psnr))
+    #plt.show()
+    fig.savefig('reconstruction_{}.png'.format(wavelet))
 
