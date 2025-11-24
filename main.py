@@ -113,7 +113,6 @@ if __name__ == '__main__':
     axs[1].set_title('Masked image')
 
     # Compressed sensing per channels
-    mask_array = jnp.array(mask_array)
     image_channels = []
     for channel in range(c):
         image_channel = jnp.array(image[..., channel].astype(float))
