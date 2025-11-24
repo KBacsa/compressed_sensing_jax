@@ -1,0 +1,3 @@
+[submodule "jax-wavelets"]
+	path = jax-wavelets
+	url = https://github.com/crowsonkb/jax-wavelets
