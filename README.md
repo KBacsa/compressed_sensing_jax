@@ -8,8 +8,12 @@ The implementation of the wavelets is taken from [jax-wavelets](https://github.c
 
 ## Explanation
 
-Given a sensing operator $$\Psi$$
+Given a sparse sensing operator $$\Phi$$, we find a sparse representation $$\theta$$ of the image $$x$$ transformed by a universal transform basis $$\Psi$$, i.e. $$x = \Psi(\theta)$$.
+Finding the optimal $$\theta^{\star}$$ is equivalent to solving the LASSO regression with a regularization weight $$\lambda$$:
 
+$$\theta^\star = \arg \min_{\theta} || \Phi(\Psi(\theta)) - \Phi(x)||_2^2 + \lambda ||\theta||_1$$  
+
+We solve this problem using the implementation of the [FISTA](https://epubs.siam.org/doi/10.1137/080716542) algorithm in ```jaxopt```.
 
 ## Requirements
 
