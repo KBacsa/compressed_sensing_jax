@@ -30,6 +30,8 @@ if __name__ == '__main__':
     parser.add_argument('--wavelet-name', type=str, default='db3', help='Wavelet')
     parser.add_argument('--mode', type=str, default='wrap', help='Wavelet signal extension method')
     parser.add_argument('--level', type=int, default=3, help='Wavelet level')
+    parser.add_argument('--step-size', type=float, default=0, help='Step size of descent (leave 0 for Line Search)')
+    parser.add_argument('--max-ls', type=int, default=50, help='Max steps of Line Search')
     parser.add_argument('--l1-reg', type=float, default=1e-1, help='Weight of L1 regularization')
     parser.add_argument('--debug', type=bool, default=True, help='Show descent')
 
@@ -122,7 +124,7 @@ if __name__ == '__main__':
         theta_true = adj_Psi(image_channel)
         theta_init = jnp.ones_like(theta_true)
 
-        pg = ProximalGradient(fun=least_squares, prox=prox_lasso, verbose=args.debug, stepsize=0, maxls=50)
+        pg = ProximalGradient(fun=least_squares, prox=prox_lasso, verbose=args.debug, stepsize=args.step_size, maxls=args.max_ls)
         pg_sol = pg.run(theta_init, hyperparams_prox=args.l1_reg, data=(mask_index, b)).params
         reconstruction = np.asarray(Psi(pg_sol))
         image_channels.append(reconstruction)
